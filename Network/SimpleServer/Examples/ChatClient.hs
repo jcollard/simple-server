@@ -1,4 +1,4 @@
-module Network.SimpleServer.Examples.ChatClient(main) where
+module Network.SimpleServer.Examples.ChatClient(main, run) where
 import Network
 import System.Environment
 import Control.Concurrent

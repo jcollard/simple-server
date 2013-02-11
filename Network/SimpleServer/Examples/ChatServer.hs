@@ -1,4 +1,4 @@
-module Network.SimpleServer.Examples.ChatServer(main) where
+module Network.SimpleServer.Examples.ChatServer(main, run) where
 import Data.Char
 import Data.List
 import System.Environment
