@@ -111,13 +111,16 @@ run port = do
   putStrLn $ "Chat Server Started on Port: " ++ (show port)
   putStrLn $ "Type 'stop' to stop the server."
   waitStop server
+  S.stop server
   putStrLn "Server Stopped"
 
 -- Waits for the word 'stop' to be entered
 waitStop :: S.Server -> IO ()
 waitStop server = do
   string <- getLine
-  if string == "stop" then S.stop server else waitStop server
+  case string of
+    "stop" -> return ()
+    _ -> waitStop server
   
 -- Starts a server on the specified port or prints the usage message
 main = do
