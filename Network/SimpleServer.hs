@@ -19,6 +19,7 @@ import Control.Concurrent.MVar hiding(modifyMVar)
 import Control.Concurrent.Thread.Delay
 import Control.Exception
 import Control.Monad
+import qualified Data.ByteString.Char8 as ByteS
 import Data.Either
 import Data.Foldable(toList)
 import qualified Data.HashTable.IO as HT
@@ -28,7 +29,7 @@ import Data.Time.Clock
 import qualified Data.Sequence as Seq
 import qualified Network as Net
 import qualified Network.Socket as Net(close)
-import System.IO
+import System.IO(Handle, hSetBuffering, BufferMode(NoBuffering))
 
 -- |A CmdHandler is used to handle a command in the form of a list of strings
 type CmdHandler = [String] -> Server -> ClientConn -> IO ()
@@ -405,6 +406,14 @@ putStrLn' mvar string = do
   putStrLn string
   Lock.release lock
   
+hPutStrLn :: Handle -> String -> IO ()
+hPutStrLn handle string = ByteS.hPutStrLn handle (ByteS.pack string)
+
+hGetLine :: Handle -> IO String
+hGetLine handle = do
+  line <- ByteS.hGetLine handle
+  return $ ByteS.unpack line
+
 debug = False
 
 debugLn' :: MVar Lock.Lock -> String -> IO ()
