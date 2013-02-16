@@ -77,7 +77,7 @@ msgCmd = "/message"
 msgHandler :: S.CmdHandler
 msgHandler (cmd:msg) server client = do
   name <- S.lookup client username
-  S.broadcast server $ name ++ "> " ++ (intercalate " " msg)
+  S.broadcast server $ name ++ "> " ++ (unwords msg)
 
 -- The disconnect command causes the message "Goodbye!" to be sent to
 -- the client. Then they are disconnected from the server.

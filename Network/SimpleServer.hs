@@ -1,4 +1,10 @@
 {-# LANGUAGE ConstraintKinds #-} 
+
+{-|
+SimpleServer is an interface for building thread safe message passing servers.
+The goal is to remove the concurrency layer and allow the programmer to
+focus on the functionality of the client / server interaction.
+-}
 module Network.SimpleServer(CmdHandler,
                             ConnectionHandler,
                             DisconnectHandler,
@@ -20,24 +26,58 @@ import Control.Concurrent.Thread.Delay
 import Control.Exception
 import Control.Monad
 import qualified Data.ByteString.Char8 as ByteS
-import Data.Either
 import Data.Foldable(toList)
 import qualified Data.HashTable.IO as HT
 import Data.IORef
-import Data.Maybe
 import Data.Time.Clock
 import qualified Data.Sequence as Seq
 import qualified Network as Net
 import qualified Network.Socket as Net(close)
 import System.IO(Handle, hSetBuffering, BufferMode(NoBuffering))
 
--- |A CmdHandler is used to handle a command in the form of a list of strings
+{-| A server may have any number of CmdHandlers. When a CmdHandler is called it
+is passed a list of strings representing the message the server received, the
+server that received it, and the client that send the message. The first
+part element of the list is the string that triggered the CmdHandler.
+
+@
+-- If the message command is received, any text following it is
+-- broadcast to all users.
+msgHandler :: S.CmdHandler
+msgHandler (cmd:msg) server client = do
+  -- Look up the clients username
+  name <- S.lookup client username
+  -- Broadcast a message to all connected clients
+  S.broadcast server $ name ++ "> " ++ (unwords msg)
+@
+-}
 type CmdHandler = [String] -> Server -> ClientConn -> IO ()
 
--- |A ConnectionHandler is called each time a client connects to the server.
+{-| Each server has one ConnectionHandler that is called each time a client connects to the server.
+
+@
+simpleConnect :: ConnectionHandler
+simpleConnect server client = do
+  -- Send a message to all connected clients
+  broadcast server \"A new user has joined.\"
+  -- Send a welcome message to the client that connected
+  respond client \"Welcome!\"
+@
+-}
 type ConnectionHandler = Server -> ClientConn -> IO ()
 
--- |A DisconnectHandler is called each time a client is disconnected from the server.
+{-|A DisconnectHandler is called each time a client is disconnected from the server.
+
+@
+simpleDisconnect :: DisconnectHandler
+simpleDisconnect server client = do
+  -- Send a message to all connected clients
+  broadcast server \"A user has left the room.\"
+  -- Send a message to the client that disconnected
+  respond client \"Goodbye!\"
+@
+
+-}
 type DisconnectHandler = Server -> ClientConn -> IO ()
 
 {-|
@@ -46,26 +86,29 @@ storing data associated with the client. Each client will be given
 a unique cid and are Eq if their cid's are Eq.
 
 A ClientConn comes packaged with two functions for storing additional
-information in Strings. `lookup` and `modify`. The lookup function
+information in Strings, lookup and modify. The lookup function
 takes a key and returns the current value of the key or the empty
 string if it has never been set. The modify function
 takes a key and value and updates it such that the next call to
 lookup with that key will return the value provided.
 -}
-data ClientConn = ClientConn { -- | The Unique ID for this client
-                               cid       :: Integer,
-                               -- | A lookup function for this client
-                               lookup    :: (String -> IO String),
-                               -- | A modify function for this client
-                               modify    :: (String -> String -> IO ()),
-                               chandle   :: Handle,
-                               host      :: Net.HostName,
-                               pid       :: Net.PortNumber,
-                               msgList  :: List String,
-                               dead      :: MVar Bool,
-                               timestamp :: TimeStamp,
-                               tid       :: MVar (ThreadId, ThreadId),
-                               lock      :: MVar Lock.Lock}
+data ClientConn = ClientConn { 
+  -- | The Unique ID for this client
+  cid       :: Integer,
+  
+  -- | A lookup function for this client
+  lookup    :: (String -> IO String),
+  
+  -- | A modify function for this client
+  modify    :: (String -> String -> IO ()),
+  chandle   :: Handle,
+  host      :: Net.HostName,
+  pid       :: Net.PortNumber,
+  msgList  :: List String,
+  dead      :: MVar Bool,
+  timestamp :: TimeStamp,
+  tid       :: MVar (ThreadId, ThreadId),
+  lock      :: Lock.Lock}
 
 instance Eq ClientConn where
   (==) c0 c1 = (cid c0) == (cid c1)
@@ -77,7 +120,7 @@ data Server = Server { port       :: Net.PortID,
                        cmdList   :: List Message,
                        lastclean  :: TimeStamp,
                        timeout    :: NominalDiffTime,
-                       serverLock :: MVar Lock.Lock,
+                       serverLock :: Lock.Lock,
                        cmdTable   :: CmdTable,
                        nextID     :: MVar Integer,
                        cHandler   :: ConnectionHandler,
@@ -89,7 +132,8 @@ data Server = Server { port       :: Net.PortID,
 
 
 {-|
-Creates a new server that is not connected to anything.
+Creates a new server with the specified ConnectionHandler and DisconnectHandler.
+On a call to start, the server will attempt to connect on the specified Port.
 If a client does not talk to a server for more than 60 seconds
 it will be disconnected.
 -}
@@ -100,8 +144,7 @@ new cHandler dHandler pid = do
   cmdList <- emptyList
   time <- getCurrentTime
   lastClean <- newMVar time
-  lock <- Lock.new
-  serverLock <- newMVar lock
+  serverLock <- Lock.new
   let allowed = 60
   cmdTable <- HT.new
   nextID <- newMVar 0
@@ -110,13 +153,15 @@ new cHandler dHandler pid = do
 
 {-|
 Given a server, a command, and a command handler, adds the command to the
-server. If the command already exists, it will be overwritten
+server. If the command already exists, it will be overwritten.
 -}
 addCommand :: Server -> String -> CmdHandler -> IO ()
 addCommand server cmd handler = HT.insert (cmdTable server) cmd handler
 
 {-|
-Starts a server if it is currently not started. Otherwise, does nothing.
+Starts a server if it is currently not started. Otherwise, does nothing. The
+server will be started on a new thread and control will be returned to the
+thread that called this function.
 -}
 start :: Server -> IO ()
 start server = Net.withSocketsDo $ do
@@ -136,7 +181,8 @@ start server = Net.withSocketsDo $ do
 
 {-|
 Stops a server if it is running sending a disconnect message
-to all clients. Otherwise, does nothing.
+to all clients and killing any threads that have been spawned. 
+Otherwise, does nothing.
 Any shutdown operations should be run before this is called. 
 -}
 stop :: Server -> IO ()
@@ -154,13 +200,13 @@ stop server = Net.withSocketsDo $ do
       writeIORef (socket server) Nothing
 
 {-|
-Adds a response message to the queue.
+Adds a message to the clients message queue to be handled eventually.
 -}
 respond :: ClientConn -> String -> IO ()
 respond client string = put (msgList client) string
 
 {-|
-Broadcasts a message to all clients on the server
+Adds a message to all clients message queue to be handled eventually.
 -}
 broadcast :: Server -> String -> IO ()
 broadcast server string = do
@@ -171,8 +217,8 @@ broadcast server string = do
   debugLn' (serverLock server) "Message queued."
 
 {-|
-Disconnects the client if they are on this server. If
-they are not on this server, the results are unspecified.
+Disconnects the client if they are on this server. The clients
+message queue is guaranteed to be empty at the time of disconnect.
 -}
 disconnectClient :: Server -> ClientConn -> IO ()
 disconnectClient server client = do
@@ -202,17 +248,15 @@ data Message = Message { cmd    :: String,
 {-|              
 Creates a new client connection
 -}
-newConn :: Integer -> Handle -> Net.HostName -> Net.PortNumber -> IO ClientConn
-newConn id handle host pid = do
+newConn :: Integer -> Handle -> Net.HostName -> Net.PortNumber -> Lock.Lock -> IO ClientConn
+newConn id handle host pid lock = do
   queue <- emptyList
   dead' <- newMVar False
   tid <- newEmptyMVar
   timestamp <- newEmptyMVar
-  lock <- newEmptyMVar
   table <- HT.new
-  l <- Lock.new
-  let lookup = safeLookup l table
-      modify = safeModify l table
+  let lookup = safeLookup lock table
+      modify = safeModify lock table
   return $ ClientConn id lookup modify handle host pid queue dead' timestamp tid lock
 
 safeLookup :: Lock.Lock -> UserTable -> (String -> IO String)
@@ -346,11 +390,9 @@ acceptCon server sock = do
   hSetBuffering handle NoBuffering
   id <- takeMVar (nextID server)
   putMVar (nextID server) (id+1)
-  conn <- newConn id handle host pid
+  conn <- newConn id handle host pid (serverLock server)
   time <- getCurrentTime
   putMVar (timestamp conn) time
-  lock' <- readMVar $ serverLock server
-  putMVar (lock conn) lock'
   put (clients server) conn
   wio <- forkIO $ writeClient conn
   rio <- forkIO $ readClient conn (cmdList server)
@@ -399,9 +441,8 @@ writeClient client = do
 
 -- Debugging putStrLn that takes a lock such that
 -- the output is readable.
-putStrLn' :: MVar Lock.Lock -> String -> IO ()
-putStrLn' mvar string = do
-  lock <- readMVar mvar
+putStrLn' :: Lock.Lock -> String -> IO ()
+putStrLn' lock string = do
   Lock.acquire lock
   putStrLn string
   Lock.release lock
@@ -416,7 +457,7 @@ hGetLine handle = do
 
 debug = False
 
-debugLn' :: MVar Lock.Lock -> String -> IO ()
+debugLn' :: Lock.Lock -> String -> IO ()
 debugLn' lock str = if debug then putStrLn' lock str else return ()
 
 emptyList :: IO (List a)
