@@ -235,8 +235,9 @@ newConn id handle host pid server = do
   tid <- newEmptyMVar
   timestamp <- newEmptyMVar
   table <- HT.new
-  let lookup = safeLookup (lock server) table
-      modify = safeModify (lock server) table
+  lock <- Lock.new
+  let lookup = safeLookup lock table
+      modify = safeModify lock table
   return $ ClientConn id lookup modify handle host pid queue dead' timestamp tid server
 
 safeLookup :: Lock.Lock -> UserTable -> (String -> IO String)
