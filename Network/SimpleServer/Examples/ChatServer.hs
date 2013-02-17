@@ -85,7 +85,7 @@ disCmd = "/disconnect"
 disHandler :: S.CmdHandler
 disHandler _ server client = do
   S.respond client "Goodbye!"
-  S.disconnectClient server client
+  S.disconnect client
   
 -- The who command responds to the client with
 -- a list of usernames
